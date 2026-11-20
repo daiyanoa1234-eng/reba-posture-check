@@ -314,7 +314,10 @@ export function App() {
 
   useEffect(() => {
     const onUnload = (e: BeforeUnloadEvent) => {
-      if (analysis && !saved) e.preventDefault();
+      if (analysis && !saved) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
     };
     window.addEventListener('beforeunload', onUnload);
     return () => window.removeEventListener('beforeunload', onUnload);
