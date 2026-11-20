@@ -1,9 +1,9 @@
 import { useEffect, useRef } from 'preact/hooks';
 import { ModelStatus } from '../components/ModelStatus';
 import { BottomBar, Notice, TopBar, fmtSec } from '../components/ui';
-import { MODEL_FILES } from '../lib/pose/engine';
+import { AccuracyPicker } from '../components/AccuracyPicker';
 import type { LoadedVideo } from '../lib/video/videoSource';
-import { MAX_CLIP_SEC, type Settings } from '../state/settings';
+import { MAX_CLIP_SEC, PRESETS, type Settings } from '../state/settings';
 
 export interface Segment {
   start: number;
@@ -21,6 +21,7 @@ export function Prepare({
   onStart,
   onCancel,
   settings,
+  onSettings,
   message,
 }: {
   video: LoadedVideo;
@@ -29,6 +30,7 @@ export function Prepare({
   onStart: () => void;
   onCancel: () => void;
   settings: Settings;
+  onSettings: (s: Settings) => void;
   message: string | null;
 }) {
   const ref = useRef<HTMLVideoElement>(null);
@@ -71,7 +73,7 @@ export function Prepare({
   return (
     <>
       <TopBar title="解析の準備" onBack={onCancel} />
-      <main>
+      <main class="desk-2col">
         {message && <Notice kind="info" title={message} />}
         <div class="rec-view">
           <video ref={ref} src={video.url} controls playsInline muted preload="metadata" aria-label="選択した動画" />
@@ -143,9 +145,11 @@ export function Prepare({
             （{fmtSec(len)}）
           </p>
           <p>
-            毎秒 {settings.fps} フレームを抽出 → 約 {frames} フレームを解析します（{MODEL_FILES[settings.model].label}モデル・{settings.delegate}）。
+            毎秒 {settings.fps} フレームを抽出 → 約 {frames} フレーム × 推定 {PRESETS[settings.accuracy].passes} 回（{settings.delegate}）
           </p>
-          <small>解析時間は端末の性能によって大きく変わります。設定は「詳細設定」で変更できます。</small>
+          <h3>解析の精度</h3>
+          <AccuracyPicker value={settings.accuracy} onChange={(a) => onSettings({ ...settings, accuracy: a })} />
+          <small>精度を上げるほど時間がかかります（端末の性能で大きく変わります）。解析後、関節点は画面上で手動調整できます。</small>
           <ModelStatus />
         </div>
       </main>

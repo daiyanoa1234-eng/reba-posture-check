@@ -4,14 +4,14 @@ export function Help({ onBack }: { onBack: () => void }) {
   return (
     <>
       <TopBar title="使い方と注意" onBack={onBack} />
-      <main>
+      <main class="desk-2col">
         <section class="card stack">
           <h2>使い方</h2>
           <ol style={{ margin: 0, paddingLeft: '1.3em' }}>
             <li>「撮影する」または「保存済みの動画を選ぶ」（20秒を超える動画は区間を選択）</li>
-            <li>解析（毎秒5フレーム程度。進捗とキャンセルを表示）</li>
+            <li>精度（速度優先／高精度／最高精度）を選んで解析（毎秒5フレーム程度。進捗とキャンセルを表示）</li>
             <li>評価候補の場面から1つ選ぶ（別の場面に選び直し可）</li>
-            <li>骨格・推定角度・3D骨格・仮スコアを確認</li>
+            <li>骨格・推定角度・3D骨格・仮スコアを確認。関節点がずれていれば「関節を調整」でドラッグして直す（拡大・1px 微調整・元に戻す）</li>
             <li>手動項目（重量・把持・活動・ねじれ等）を入力し、推定姿勢を確認</li>
             <li>結果を確認して端末に保存。画像・CSV で書き出し</li>
           </ol>

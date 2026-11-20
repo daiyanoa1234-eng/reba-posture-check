@@ -11,7 +11,7 @@ export function Analyzing({ progress, onCancel }: { progress: AnalyzeProgress | 
   return (
     <>
       <TopBar title="解析中" />
-      <main>
+      <main class="desk-2col">
         <div class="card stack" aria-live="polite">
           <ModelStatus />
           {progress?.phase === 'frames' || done > 0 ? (

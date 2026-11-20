@@ -1,10 +1,60 @@
-export type ModelVariant = 'lite' | 'full';
+export type ModelVariant = 'lite' | 'full' | 'heavy';
 export type DelegatePref = 'CPU' | 'GPU';
+export type AccuracyPreset = 'fast' | 'high' | 'max';
+
+export interface PresetDef {
+  label: string;
+  model: ModelVariant;
+  /** 人物領域を切り出して2回目の推定を行う */
+  refine: boolean;
+  /** 左右反転画像でも推定して統合する */
+  flip: boolean;
+  /** 1フレームあたりの推定回数 */
+  passes: number;
+  description: string;
+}
+
+export const PRESETS: Record<AccuracyPreset, PresetDef> = {
+  fast: {
+    label: '速度優先',
+    model: 'lite',
+    refine: false,
+    flip: false,
+    passes: 1,
+    description: '軽量モデルで1回推定。最も速いが関節点は粗い',
+  },
+  high: {
+    label: '高精度',
+    model: 'full',
+    refine: true,
+    flip: false,
+    passes: 2,
+    description: '標準モデル＋人物を切り出して拡大し再推定',
+  },
+  max: {
+    label: '最高精度',
+    model: 'heavy',
+    refine: true,
+    flip: true,
+    passes: 3,
+    description: '高精度モデル＋切り出し再推定＋左右反転画像との統合（不一致の点は要確認に）',
+  },
+};
+
+/** PC（大きな画面・マウス操作）かどうか。初期設定の選択だけに使う */
+export function isDesktopLike(): boolean {
+  try {
+    return window.matchMedia('(min-width: 1024px) and (pointer: fine)').matches;
+  } catch {
+    return false;
+  }
+}
 
 export interface Settings {
   /** 1秒あたりの抽出フレーム数 */
   fps: number;
-  model: ModelVariant;
+  /** 精度と速度の設定（モデル・推定回数を決める） */
+  accuracy: AccuracyPreset;
   delegate: DelegatePref;
   /** 関節点を「映っている」とみなす visibility の下限（精度の保証ではない） */
   visibilityThreshold: number;
@@ -26,7 +76,7 @@ export const MAX_CLIP_SEC = 20;
 
 export const DEFAULT_SETTINGS: Settings = {
   fps: 5,
-  model: 'lite',
+  accuracy: 'high',
   delegate: 'CPU',
   visibilityThreshold: 0.5,
   uprightToleranceDeg: 5,
@@ -37,16 +87,25 @@ export const DEFAULT_SETTINGS: Settings = {
   frameMaxSide: 960,
 };
 
-const KEY = 'reba-settings-v1';
+const KEY = 'reba-settings-v2';
+
+/** 端末に合わせた初期設定（PC は最高精度、スマホは高精度） */
+export function deviceDefaults(): Settings {
+  const desk = isDesktopLike();
+  return { ...DEFAULT_SETTINGS, accuracy: desk ? 'max' : 'high', frameMaxSide: desk ? 1280 : 960 };
+}
 
 export function loadSettings(): Settings {
+  const base = deviceDefaults();
   try {
     const raw = localStorage.getItem(KEY);
-    if (!raw) return { ...DEFAULT_SETTINGS };
+    if (!raw) return base;
     const parsed = JSON.parse(raw) as Partial<Settings>;
-    return { ...DEFAULT_SETTINGS, ...parsed };
+    const s = { ...base, ...parsed };
+    if (!(s.accuracy in PRESETS)) s.accuracy = base.accuracy;
+    return s;
   } catch {
-    return { ...DEFAULT_SETTINGS };
+    return base;
   }
 }
 

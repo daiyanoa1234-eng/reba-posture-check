@@ -40,6 +40,46 @@ export async function buildImage(r: AssessmentRecord, frame: FrameRecord, faceBl
   });
 }
 
+/** 関節点の調整前後で変わった角度 */
+function EditedAngles({ r }: { r: AssessmentRecord }) {
+  const a0 = r.anglesAuto;
+  const a1 = r.angles;
+  if (!a0) return null;
+  const s = r.side;
+  const rows: [string, number | null | undefined, number | null | undefined][] = [
+    ['体幹の傾き', a0.trunkFlexion, a1.trunkFlexion],
+    ['頭頸部の傾き', a0.neckFlexion, a1.neckFlexion],
+    [`上腕（${sideLabel(s)}）`, a0.upperArm[s]?.elevation, a1.upperArm[s]?.elevation],
+    [`肘（${sideLabel(s)}）`, a0.elbowFlexion[s], a1.elbowFlexion[s]],
+    [`手首（${sideLabel(s)}）`, a0.wristBend[s], a1.wristBend[s]],
+    ['膝（左）', a0.kneeFlexion.left, a1.kneeFlexion.left],
+    ['膝（右）', a0.kneeFlexion.right, a1.kneeFlexion.right],
+  ];
+  const f = (v: number | null | undefined) => (v == null ? '—' : `${Math.round(v)}°`);
+  const changed = rows.filter(([, b, c]) => (b == null) !== (c == null) || (b != null && c != null && Math.abs(b - c) >= 0.5));
+  if (!changed.length) return <small>角度の変化はありません。</small>;
+  return (
+    <table class="data">
+      <thead>
+        <tr>
+          <th>部位</th>
+          <th class="num">自動推定</th>
+          <th class="num">調整後</th>
+        </tr>
+      </thead>
+      <tbody>
+        {changed.map(([n, b, c]) => (
+          <tr key={n}>
+            <th scope="row">{n}</th>
+            <td class="num">{f(b)}</td>
+            <td class="num">{f(c)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 export function Result(props: {
   record: AssessmentRecord;
   /** 新規評価のときだけ渡す（画像の再生成に使う） */
@@ -50,6 +90,8 @@ export function Result(props: {
   onSave?: (r: AssessmentRecord) => Promise<void>;
   onDelete?: () => void;
   onNew: () => void;
+  /** 同じ解析結果で別の場面・評価側を評価する */
+  onAnother?: () => void;
   onBack: () => void;
   toast: (m: string) => void;
 }) {
@@ -108,7 +150,9 @@ export function Result(props: {
   return (
     <>
       <TopBar title={props.saved && !editable ? '保存した評価' : '評価結果'} onBack={props.onBack} />
-      <main>
+      <main class="result-main">
+        <div class="result-grid">
+        <div class="result-left">
         {r.isDemo && <Notice kind="info" title="模擬データから作成した評価です（実測ではありません）" />}
         <ScoreBox result={r.result} status={r.status} />
         {r.status !== 'final' && (
@@ -132,13 +176,30 @@ export function Result(props: {
           )}
           {faceBlur && !blurOk && image && <Notice title="顔の位置を推定できず、ぼかしを適用できませんでした。画像の扱いに注意してください。" />}
         </section>
+        </div>
+        <div class="result-right">
 
         <section class="card stack">
           <h2>部位別の点数</h2>
           <p>
             評価場面 {r.source.frameTime.toFixed(1)}秒／評価側 <strong>{sideLabel(r.side)}</strong>（同じフレームの姿勢のみで採点）
           </p>
+          {!!r.landmarkEdits?.length && (
+            <small>関節点を手動調整したため、「自動推定」の区分は調整後の関節点から計算しています（調整した点：{r.landmarkEdits.map((e) => e.name).join('、')}）。</small>
+          )}
           <ScoreTable result={r.result} auto={r.auto} manual={r.manual} angles={r.angles} side={r.side} />
+        </section>
+
+        <section class="card stack">
+          <h2>関節点の手動調整</h2>
+          {r.landmarkEdits?.length ? (
+            <>
+              <p>{r.landmarkEdits.map((e) => e.name).join('、')}（評価者が画像上で位置を調整）</p>
+              <EditedAngles r={r} />
+            </>
+          ) : (
+            <p>なし（自動推定の関節点を使用）</p>
+          )}
         </section>
 
         <section class="card stack">
@@ -227,9 +288,16 @@ export function Result(props: {
               この評価を削除
             </button>
           )}
+          {props.onAnother && (
+            <button class="btn block" onClick={props.onAnother}>
+              同じ動画で別の場面・評価側を評価する
+            </button>
+          )}
           <button class="btn block" onClick={props.onNew}>
             新しい評価を始める
           </button>
+        </div>
+        </div>
         </div>
       </main>
       {props.onSave && (

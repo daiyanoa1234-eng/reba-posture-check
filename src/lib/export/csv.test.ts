@@ -30,6 +30,29 @@ function rec(over: Partial<AssessmentRecord> = {}): AssessmentRecord {
   };
 }
 
+/** テスト用の簡易 CSV 行パーサ（引用符内のカンマに対応） */
+function parseRow(line: string): string[] {
+  const out: string[] = [];
+  let cur = '';
+  let q = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (q) {
+      if (c === '"' && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else if (c === '"') q = false;
+      else cur += c;
+    } else if (c === '"') q = true;
+    else if (c === ',') {
+      out.push(cur);
+      cur = '';
+    } else cur += c;
+  }
+  out.push(cur);
+  return out;
+}
+
 describe('CSV 書き出し', () => {
   it('カンマ・引用符・改行をエスケープする', () => {
     expect(csvCell('a,b')).toBe('"a,b"');
@@ -58,5 +81,22 @@ describe('CSV 書き出し', () => {
   it('自動推定値と手動値の出所を区別して出力する', () => {
     const text = recordsToCsv([rec({ manual: { trunkPos: '4' } })]);
     expect(text).toContain('手動修正');
+  });
+
+  it('関節点の手動調整と調整前の角度を出力する', () => {
+    const before = emptyAngles();
+    before.kneeFlexion.left = 26;
+    const after = emptyAngles();
+    after.kneeFlexion.left = 34;
+    const text = recordsToCsv([
+      rec({ angles: after, anglesAuto: before, landmarkEdits: [{ joint: 25, name: '左膝', from: { x: 0.4, y: 0.5 }, to: { x: 0.41, y: 0.5 } }] }),
+    ]);
+    const [header, row] = text.replace('\uFEFF', '').split('\r\n');
+    const h = parseRow(header);
+    const v = parseRow(row);
+    expect(h.length).toBe(v.length);
+    expect(v[h.indexOf('関節点の手動調整')]).toBe('左膝');
+    expect(v[h.indexOf('左膝屈曲_推定°')]).toBe('34.0');
+    expect(v[h.indexOf('左膝屈曲_推定°_調整前の自動推定')]).toBe('26.0');
   });
 });

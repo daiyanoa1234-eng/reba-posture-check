@@ -52,6 +52,10 @@ export function recordRow(r: AssessmentRecord): [string, string][] {
     ['評価側', sideLabel(r.side)],
     ['撮影方向_推定', r.view ?? ''],
     ...angleColumns(r.angles, r.side),
+    ['関節点の手動調整', (r.landmarkEdits ?? []).map((e) => e.name).join(' / ')],
+    ...(r.anglesAuto ? angleColumns(r.anglesAuto, r.side) : angleColumns(r.angles, r.side)).map(
+      ([h, v]) => [`${h}_調整前の自動推定`, r.landmarkEdits?.length ? v : ''] as [string, string],
+    ),
   ];
   for (const k of ITEM_KEYS) {
     const { value, source } = resolveItem(k, r.auto, r.manual);
@@ -84,6 +88,7 @@ export function recordRow(r: AssessmentRecord): [string, string][] {
     ['未確認項目', res.unknown.map((k) => ITEMS[k].label).join(' / ')],
     ['姿勢確認済み', r.postureConfirmed ? 'はい' : 'いいえ'],
     ['検出上の注意', r.qualityIssues.join(' / ')],
+    ['精度設定', r.source.accuracy ?? ''],
     ['モデル', r.source.model],
     ['実行方式', r.source.delegate],
     ['抽出fps', String(r.source.fps)],

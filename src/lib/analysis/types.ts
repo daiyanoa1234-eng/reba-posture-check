@@ -20,6 +20,10 @@ export interface FrameRecord {
   imageBlob: Blob | null;
   width: number;
   height: number;
+  /** 人物領域の切り出し再推定を行ったか */
+  refined?: boolean;
+  /** 左右反転画像との一致率（0..1, 未実施は null） */
+  flipAgreement?: number | null;
 }
 
 export interface AnalysisTiming {
@@ -40,6 +44,8 @@ export interface AnalysisResult {
   fps: number;
   frames: FrameRecord[];
   model: string;
+  /** 精度設定（速度優先 / 高精度 / 最高精度） */
+  accuracy?: string;
   delegate: string;
   timing: AnalysisTiming;
   createdAt: string;

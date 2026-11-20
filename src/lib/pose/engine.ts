@@ -28,6 +28,7 @@ const base = import.meta.env.BASE_URL;
 export const MODEL_FILES: Record<ModelVariant, { path: string; label: string; sizeMB: number }> = {
   lite: { path: `${base}models/pose_landmarker_lite.task`, label: '軽量（lite）', sizeMB: 5.8 },
   full: { path: `${base}models/pose_landmarker_full.task`, label: '標準（full）', sizeMB: 9.4 },
+  heavy: { path: `${base}models/pose_landmarker_heavy.task`, label: '高精度（heavy）', sizeMB: 30.7 },
 };
 
 type Listener = (s: EngineStatus) => void;

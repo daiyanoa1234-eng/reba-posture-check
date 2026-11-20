@@ -29,14 +29,20 @@ export interface AssessmentRecord {
     frameTime: number;
     fps: number;
     model: string;
+    /** 精度設定（速度優先 / 高精度 / 最高精度） */
+    accuracy?: string;
     delegate: string;
     analysisMs: number;
     analyzedFrames: number;
   };
   side: Side;
   view: ViewDirection | null;
-  /** 評価フレームの推定角度（推定値） */
+  /** 評価フレームの角度（関節点の手動調整を反映した値。推定値） */
   angles: Angles;
+  /** 手動調整前の自動推定の角度 */
+  anglesAuto?: Angles;
+  /** 評価者が手動で調整した関節点（画像正規化座標の調整前→調整後） */
+  landmarkEdits?: { joint: number; name: string; from: { x: number; y: number } | null; to: { x: number; y: number } }[];
   /** 自動推定で設定した値 */
   auto: ItemValues;
   /** 評価者が入力・修正した値 */

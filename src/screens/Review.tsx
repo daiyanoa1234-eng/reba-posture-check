@@ -1,7 +1,8 @@
 import { lazy, Suspense } from 'preact/compat';
 import { useState } from 'preact/hooks';
 import { AngleTable } from '../components/AngleTable';
-import { FrameView, SkeletonLegend } from '../components/FrameView';
+import type { ComponentChildren } from 'preact';
+import { SkeletonLegend } from '../components/FrameView';
 import { Timeline } from '../components/Timeline';
 import { BottomBar, Notice, ScoreBox, TopBar, useObjectUrl } from '../components/ui';
 import type { AnalysisSummary } from '../lib/analysis/analyze';
@@ -44,11 +45,15 @@ export function Review(props: {
   result: RebaResult;
   status: AssessmentStatus;
   visThr: number;
+  /** 関節調整つきのフレーム表示 */
+  editor: ComponentChildren;
+  /** 関節を調整したフレーム（角度表示用） */
+  frame: FrameRecord;
   onNext: () => void;
   onBack: () => void;
 }) {
   const { analysis: an, scores, candidates, selected } = props;
-  const frame = an.frames[selected];
+  const frame = props.frame;
   const score = scores[selected];
   const [show3d, setShow3d] = useState(false);
   const t = an.timing;
@@ -116,7 +121,7 @@ export function Review(props: {
               {frame.time.toFixed(1)}秒のフレーム{isCand ? `（候補${candidates.findIndex((c) => c.index === selected) + 1}）` : ''}
             </h2>
           </div>
-          <FrameView frame={frame} side={props.side} visThr={props.visThr} />
+          {props.editor}
           <SkeletonLegend />
           <div class="stepper">
             <button class="btn" onClick={() => props.onSelect(Math.max(0, selected - 1))} disabled={selected === 0} aria-label="前のフレーム">

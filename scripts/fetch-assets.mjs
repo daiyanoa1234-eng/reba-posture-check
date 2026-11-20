@@ -37,6 +37,11 @@ const MODELS = [
     url: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task',
     sha256: '5134a3aad27a58b93da0088d431f366da362b44e3ccfbe3462b3827a839011b1',
   },
+  {
+    file: 'pose_landmarker_heavy.task',
+    url: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task',
+    sha256: '64437af838a65d18e5ba7a0d39b465540069bc8aae8308de3e318aad31fcbc7b',
+  },
 ];
 const modelDir = join(root, 'public/models');
 mkdirSync(modelDir, { recursive: true });
