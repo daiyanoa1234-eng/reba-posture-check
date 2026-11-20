@@ -164,4 +164,4 @@ public/models/          姿勢推定モデル（Apache-2.0）
 
 - 同梱モデル・WASM: MediaPipe（Apache License 2.0）— [public/models/README.md](public/models/README.md)
 - 依存ライブラリ: Three.js（MIT）、Preact（MIT）ほか各パッケージのライセンスに従います
-- 本リポジトリのコード自体のライセンスは未設定です
+- 本リポジトリのコード: [MIT License](LICENSE)（同梱モデル・WASM は上記の Apache License 2.0 のまま）

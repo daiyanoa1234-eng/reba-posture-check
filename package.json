@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "description": "建設現場向け REBA 姿勢評価 PWA（端末内で動画解析）",
+  "license": "MIT",
   "scripts": {
     "setup:assets": "node scripts/fetch-assets.mjs",
     "predev": "node scripts/fetch-assets.mjs --quiet",
