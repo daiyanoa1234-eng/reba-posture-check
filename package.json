@@ -1,0 +1,36 @@
+{
+  "name": "reba-posture-check",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "建設現場向け REBA 姿勢評価 PWA（端末内で動画解析）",
+  "scripts": {
+    "setup:assets": "node scripts/fetch-assets.mjs",
+    "predev": "node scripts/fetch-assets.mjs --quiet",
+    "dev": "vite --host",
+    "predev:https": "node scripts/fetch-assets.mjs --quiet",
+    "dev:https": "vite --host --mode https",
+    "prebuild": "node scripts/fetch-assets.mjs --quiet",
+    "build": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json && vite build",
+    "preview": "vite preview --host",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
+    "icons": "node scripts/gen-icons.mjs"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "^1.2.3",
+    "preact": "^11.2.0",
+    "three": "^0.187.0"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.6",
+    "@types/node": "^22.20.5",
+    "@types/three": "^0.187.0",
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
+    "typescript": "5.9",
+    "vite": "^8.3.8",
+    "vite-plugin-pwa": "^2.0.0",
+    "vitest": "^5.1.1"
+  }
+}

@@ -1,0 +1,14 @@
+node_modules/
+dist/
+dev-dist/
+public/mediapipe/wasm/
+*.local
+.DS_Store
+coverage/
+# テスト用の実動画はコミットしない
+test-media/
+*.mov
+*.MOV
+*.mp4
+*.webm
+.claude/
