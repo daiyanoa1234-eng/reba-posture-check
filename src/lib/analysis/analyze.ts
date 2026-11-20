@@ -3,11 +3,12 @@
  * 1フレームごとに処理を区切って画面更新とキャンセルを受け付ける。
  */
 import { computeAngles, viewDirection } from '../angles/angles';
-import { poseEngine } from '../pose/engine';
+import { type DetectOutput, poseEngine } from '../pose/engine';
 import { LM, type Pt } from '../pose/landmarks';
+import { type Roi, cropToFrame, frameToCrop, fusePasses, hipCenter as hipOf, nearestPose, personRoi, unflipImage, unflipWorld } from '../pose/refine';
 import { encodeFrame } from '../video/encoder';
 import { type LoadedVideo, drawFrame, seekTo } from '../video/videoSource';
-import type { Settings } from '../../state/settings';
+import { PRESETS, type PresetDef, type Settings } from '../../state/settings';
 import { assessQuality } from './quality';
 import type { AnalysisResult, FrameRecord } from './types';
 
@@ -94,20 +95,114 @@ export function chooseTarget(poses: Pt[][], prev: { x: number; y: number } | nul
   return best;
 }
 
+function detectWithFallback(source: HTMLCanvasElement): DetectOutput | Promise<DetectOutput> {
+  try {
+    return poseEngine.detect(source);
+  } catch (e) {
+    if (poseEngine.status.delegate === 'GPU') return poseEngine.fallbackToCpu().then(() => poseEngine.detect(source));
+    throw e;
+  }
+}
+
+interface RefineCanvases {
+  crop: HTMLCanvasElement;
+  flip: HTMLCanvasElement;
+}
+
+/** 元動画から正方形の範囲を切り出して描く（範囲外は黒） */
+function drawCrop(video: HTMLVideoElement, roi: Roi, c: HTMLCanvasElement): void {
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  const out = Math.round(Math.min(640, Math.max(384, roi.size)));
+  if (c.width !== out) c.width = out;
+  if (c.height !== out) c.height = out;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, out, out);
+  // 範囲外を含む source rect の扱いはブラウザで差があるため、交差部分だけを明示的に描く
+  const sx = Math.max(0, roi.x);
+  const sy = Math.max(0, roi.y);
+  const ex = Math.min(vw, roi.x + roi.size);
+  const ey = Math.min(vh, roi.y + roi.size);
+  if (ex <= sx || ey <= sy) return;
+  const k = out / roi.size;
+  ctx.drawImage(video, sx, sy, ex - sx, ey - sy, (sx - roi.x) * k, (sy - roi.y) * k, (ex - sx) * k, (ey - sy) * k);
+}
+
+/**
+ * 1フレームの関節点推定。設定に応じて、人物領域の切り出し再推定・左右反転との統合を行う。
+ * いずれの段階でも人物が見つからなければ、前の段階の結果をそのまま使う。
+ */
+async function estimate(
+  video: HTMLVideoElement,
+  full: HTMLCanvasElement,
+  preset: PresetDef,
+  cv: RefineCanvases,
+  prev: { x: number; y: number } | null,
+): Promise<{ image: Pt[] | null; world: Pt[] | null; others: Pt[][]; numPoses: number; refined: boolean; agreement: number | null }> {
+  const out1 = await detectWithFallback(full);
+  const ti = chooseTarget(out1.image, prev);
+  const others = out1.image.filter((_, k) => k !== ti);
+  let image = ti >= 0 ? out1.image[ti] : null;
+  let world = ti >= 0 ? (out1.world[ti] ?? null) : null;
+  if (!image || !world || !preset.refine) return { image, world, others, numPoses: out1.image.length, refined: false, agreement: null };
+
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  const roi = personRoi(image, vw, vh);
+  if (!roi) return { image, world, others, numPoses: out1.image.length, refined: false, agreement: null };
+  drawCrop(video, roi, cv.crop);
+  const expect = frameToCrop(hipOf(image), roi, vw, vh);
+  const out2 = await detectWithFallback(cv.crop);
+  const k2 = nearestPose(out2.image, expect, 0.2);
+  if (k2 < 0 || !out2.world[k2]) return { image, world, others, numPoses: out1.image.length, refined: false, agreement: null };
+  let cropImage = out2.image[k2];
+  let cropWorld = out2.world[k2];
+  let agreement: number | null = null;
+
+  if (preset.flip) {
+    const n = cv.crop.width;
+    if (cv.flip.width !== n) cv.flip.width = n;
+    if (cv.flip.height !== n) cv.flip.height = n;
+    const fctx = cv.flip.getContext('2d')!;
+    fctx.setTransform(-1, 0, 0, 1, n, 0);
+    fctx.drawImage(cv.crop, 0, 0);
+    fctx.setTransform(1, 0, 0, 1, 0, 0);
+    const out3 = await detectWithFallback(cv.flip);
+    const k3 = nearestPose(out3.image, { x: 1 - expect.x, y: expect.y }, 0.2);
+    if (k3 >= 0 && out3.world[k3]) {
+      const fused = fusePasses(
+        { image: cropImage, world: cropWorld },
+        { image: unflipImage(out3.image[k3]), world: unflipWorld(out3.world[k3]) },
+        n,
+        n,
+      );
+      cropImage = fused.image;
+      cropWorld = fused.world;
+      agreement = fused.agreement;
+    }
+  }
+  image = cropToFrame(cropImage, roi, vw, vh);
+  world = cropWorld;
+  return { image, world, others, numPoses: out1.image.length, refined: true, agreement };
+}
+
 export async function analyzeVideo(v: LoadedVideo, settings: Settings, opts: AnalyzeOptions): Promise<AnalysisResult> {
   const t0 = performance.now();
   const check = () => {
     if (opts.signal.aborted) throw new AnalysisCancelled();
   };
+  const preset = PRESETS[settings.accuracy];
   const times = frameTimes(opts.start, opts.end, settings.fps, v.duration);
 
   opts.onProgress({ phase: 'model', done: 0, total: times.length, elapsedMs: 0 });
   const tm = performance.now();
-  await poseEngine.ensure(settings.model, settings.delegate);
+  await poseEngine.ensure(preset.model, settings.delegate);
   const modelLoadMs = performance.now() - tm;
   check();
 
   const canvas = document.createElement('canvas');
+  const cv: RefineCanvases = { crop: document.createElement('canvas'), flip: document.createElement('canvas') };
   const frames: FrameRecord[] = [];
   let seekMs = 0;
   let detectMs = 0;
@@ -125,51 +220,42 @@ export async function analyzeVideo(v: LoadedVideo, settings: Settings, opts: Ana
     seekMs += performance.now() - ts;
     check();
 
+    // JPEG 化は待たずに並行して進める（canvas の内容は呼び出し時点で複製される）
+    const te = performance.now();
+    const encP = encodeFrame(canvas, 0.85);
+    encodeMs += performance.now() - te;
+
     const td = performance.now();
-    let out;
-    try {
-      out = poseEngine.detect(canvas);
-    } catch (e) {
-      if (poseEngine.status.delegate === 'GPU') {
-        await poseEngine.fallbackToCpu();
-        out = poseEngine.detect(canvas);
-      } else throw e;
-    }
-    detectMs += performance.now() - td;
-
     const prev = prevTarget && t - prevTarget.t <= 1.0 ? prevTarget : null;
-    const ti = chooseTarget(out.image, prev);
-    const image = ti >= 0 ? out.image[ti] : null;
-    const world = ti >= 0 ? out.world[ti] ?? null : null;
-    const others = out.image.filter((_, k) => k !== ti);
-    if (image) prevTarget = { ...hipCenter(image), t };
+    const est = await estimate(v.video, canvas, preset, cv, prev);
+    detectMs += performance.now() - td;
+    if (est.image) prevTarget = { ...hipCenter(est.image), t };
 
-    const quality = assessQuality(image, out.image.length, settings.visibilityThreshold);
-    const angles = computeAngles(world, quality);
+    const quality = assessQuality(est.image, est.numPoses, settings.visibilityThreshold);
+    const angles = computeAngles(est.world, quality);
 
     const rec: FrameRecord = {
       index: i,
       time: t,
-      image,
-      world,
-      others,
-      numPoses: out.image.length,
+      image: est.image,
+      world: est.world,
+      others: est.others,
+      numPoses: est.numPoses,
       quality,
       angles,
-      view: quality.detected ? viewDirection(world) : null,
+      view: quality.detected ? viewDirection(est.world) : null,
       imageBlob: null,
       width: w,
       height: h,
+      refined: est.refined,
+      flipAgreement: est.agreement,
     };
-    // JPEG 化は待たずに並行して進める（canvas の内容は呼び出し時点で複製される）
-    const te = performance.now();
     encodes.push(
-      encodeFrame(canvas, 0.85).then((b) => {
+      encP.then((b) => {
         rec.imageBlob = b;
         preview = rec;
       }),
     );
-    encodeMs += performance.now() - te;
     frames.push(rec);
     opts.onProgress({ phase: 'frames', done: i + 1, total: times.length, elapsedMs: performance.now() - t0, last: preview ?? undefined });
     await yieldToUI();
@@ -188,7 +274,8 @@ export async function analyzeVideo(v: LoadedVideo, settings: Settings, opts: Ana
     segment: { start: opts.start, end: opts.end },
     fps: settings.fps,
     frames,
-    model: settings.model,
+    model: preset.model,
+    accuracy: settings.accuracy,
     delegate: poseEngine.status.delegate,
     timing: { totalMs: performance.now() - t0, modelLoadMs, seekMs, detectMs, encodeMs, frames: frames.length },
     createdAt: new Date().toISOString(),

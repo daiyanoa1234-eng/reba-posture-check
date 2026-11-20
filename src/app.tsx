@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { FrameEditor } from './components/FrameEditor';
 import { DemoBanner, Toast, useToast } from './components/ui';
+import { applyEdits, describeEdits } from './lib/edit/edits';
 import { AnalysisCancelled, type AnalyzeProgress, analyzeVideo, summarize } from './lib/analysis/analyze';
 import { ISSUE_LABEL } from './lib/analysis/quality';
 import type { AnalysisResult } from './lib/analysis/types';
@@ -7,7 +9,7 @@ import { generateDemo } from './lib/demo/demo';
 import { EngineLoadError, poseEngine } from './lib/pose/engine';
 import type { Side } from './lib/pose/landmarks';
 import { autoItemsFromAngles } from './lib/reba/autoItems';
-import { type ItemKey, type ItemValues, SIDE_ITEM_KEYS, effectiveValues } from './lib/reba/items';
+import { type ItemKey, type ItemValues, effectiveValues } from './lib/reba/items';
 import { computeReba, statusOf } from './lib/reba/scoring';
 import { pickCandidates, scoreFrames } from './lib/selection/candidates';
 import { deleteRecord, listRecords, saveRecord } from './lib/storage/db';
@@ -23,8 +25,22 @@ import { Recorder } from './screens/Recorder';
 import { Result } from './screens/Result';
 import { Review } from './screens/Review';
 import { SettingsView } from './screens/SettingsView';
+import { Workspace, useMediaQuery } from './screens/Workspace';
+import {
+  type SceneState,
+  copyTaskItems,
+  emptyScene,
+  hasTaskItems,
+  isSceneTouched,
+  manualOf,
+  resetEdits,
+  setEdit,
+  setItem as setSceneItem,
+  setItems as setSceneItems,
+  undoEdit,
+} from './state/scenes';
 import { onPwaChange, pwaState } from './state/pwa';
-import { type Settings, loadSettings, saveSettings } from './state/settings';
+import { PRESETS, type Settings, loadSettings, saveSettings } from './state/settings';
 
 type Screen = 'home' | 'record' | 'prepare' | 'analyzing' | 'review' | 'manual' | 'result' | 'history' | 'saved' | 'settings' | 'help';
 
@@ -55,12 +71,14 @@ export function App() {
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [selected, setSelected] = useState(0);
   const [side, setSide] = useState<Side>('right');
-  const [manual, setManual] = useState<ItemValues>({});
-  const [postureConfirmed, setPostureConfirmed] = useState(false);
+  /** 場面（フレーム番号）ごとの手動入力・姿勢確認・関節調整 */
+  const [scenes, setScenes] = useState<Record<number, SceneState>>({});
   const [meta, setMeta] = useState<AssessmentMeta>(loadMetaDefaults);
-  const [draftId, setDraftId] = useState(newId);
-  const [createdAt, setCreatedAt] = useState(() => new Date().toISOString());
-  const [saved, setSaved] = useState(false);
+  const [analysisId, setAnalysisId] = useState(newId);
+  /** 保存済みの評価（場面と評価側の組）→ 保存時刻 */
+  const [savedDrafts, setSavedDrafts] = useState<Record<string, string>>({});
+  const [editing, setEditing] = useState(false);
+  const isDesktop = useMediaQuery('(min-width: 1024px)');
   const [savedRecord, setSavedRecord] = useState<AssessmentRecord | null>(null);
   const [savedCount, setSavedCount] = useState<number | null>(null);
   const [toastMsg, toast] = useToast();
@@ -78,9 +96,9 @@ export function App() {
 
   // 解析モデルを裏で先読みしておく（失敗してもホーム画面に状態を表示するだけ）
   useEffect(() => {
-    const t = setTimeout(() => poseEngine.ensure(settings.model, settings.delegate).catch(() => undefined), 600);
+    const t = setTimeout(() => poseEngine.ensure(PRESETS[settings.accuracy].model, settings.delegate).catch(() => undefined), 600);
     return () => clearTimeout(t);
-  }, [settings.model, settings.delegate]);
+  }, [settings.accuracy, settings.delegate]);
 
   const updateSettings = (s: Settings) => {
     setSettingsState(s);
@@ -94,21 +112,42 @@ export function App() {
     spikeThresholdDeg: settings.spikeThresholdDeg,
     candidateSeparationSec: settings.candidateSeparationSec,
   };
+  const visThr = settings.visibilityThreshold;
+  // 候補とタイムラインは自動推定の値で計算する（関節を調整しても候補の並びは変えない）
   const scores = useMemo(() => (analysis ? scoreFrames(analysis.frames, sel) : []), [analysis, ...Object.values(sel)]);
   const candidates = useMemo(() => pickCandidates(scores, 3, settings.candidateSeparationSec), [scores, settings.candidateSeparationSec]);
   const summary = useMemo(() => (analysis ? summarize(analysis) : null), [analysis]);
-  const frame = analysis?.frames[selected] ?? null;
+  const rawFrame = analysis?.frames[selected] ?? null;
+  const sceneEdits = scenes[selected]?.edits;
+  // 評価に使うフレームは、関節点の調整を反映したもの
+  const frame = useMemo(() => (rawFrame ? applyEdits(rawFrame, sceneEdits, visThr) : null), [rawFrame, sceneEdits, visThr]);
+  const scene = scenes[selected] ?? emptyScene();
+  const manual = useMemo(() => manualOf(scene, side), [scene, side]);
+  const postureConfirmed = scene.confirmed[side];
   const { auto, hints } = useMemo(
     () => (frame ? autoItemsFromAngles(frame.angles, side, settings) : { auto: {}, hints: {} }),
     [frame, side, settings.uprightToleranceDeg, settings.neckExtensionToleranceDeg],
   );
   const result = useMemo(() => computeReba(effectiveValues(auto, manual)), [auto, manual]);
   const status = statusOf(result, postureConfirmed);
+  const draftKey = `${selected}-${side}`;
+  const saved = savedDrafts[draftKey] != null;
+  const touchedFrames = useMemo(() => new Set(Object.keys(scenes).map(Number).filter((k) => isSceneTouched(scenes[k]))), [scenes]);
+  /** 作業条件をコピーできる別の場面（直近に入力した場面） */
+  const copyFrom = useMemo(() => {
+    if (hasTaskItems(scenes[selected])) return null;
+    const others = Object.keys(scenes)
+      .map(Number)
+      .filter((k) => k !== selected && hasTaskItems(scenes[k]));
+    if (!others.length) return null;
+    return others.sort((a, b) => Math.abs(a - selected) - Math.abs(b - selected))[0];
+  }, [scenes, selected]);
 
   const draft: AssessmentRecord | null = useMemo(() => {
-    if (!analysis || !frame) return null;
+    if (!analysis || !frame || !rawFrame) return null;
+    const createdAt = savedDrafts[draftKey] ?? new Date().toISOString();
     return {
-      id: draftId,
+      id: `${analysisId}-${draftKey}`,
       createdAt,
       updatedAt: createdAt,
       appVersion: __APP_VERSION__,
@@ -123,6 +162,7 @@ export function App() {
         frameTime: frame.time,
         fps: analysis.fps,
         model: analysis.model,
+        accuracy: analysis.accuracy,
         delegate: analysis.delegate,
         analysisMs: analysis.timing.totalMs,
         analyzedFrames: analysis.frames.length,
@@ -130,6 +170,8 @@ export function App() {
       side,
       view: frame.view,
       angles: frame.angles,
+      anglesAuto: rawFrame.angles,
+      landmarkEdits: describeEdits(rawFrame, scene.edits),
       auto,
       manual,
       hints,
@@ -139,16 +181,17 @@ export function App() {
       imageFaceBlurred: false,
       qualityIssues: frame.quality.issues.map((i) => ISSUE_LABEL[i]),
     };
-  }, [analysis, frame, draftId, createdAt, status, meta, side, auto, manual, hints, postureConfirmed, result]);
+  }, [analysis, frame, rawFrame, scene, analysisId, draftKey, savedDrafts, status, meta, side, auto, manual, hints, postureConfirmed, result]);
 
   // ---- 操作 --------------------------------------------------------------
   const resetAssessment = () => {
-    setManual({});
-    setPostureConfirmed(false);
-    setDraftId(newId());
-    setCreatedAt(new Date().toISOString());
-    setSaved(false);
+    setScenes({});
+    setSavedDrafts({});
+    setAnalysisId(newId());
+    setEditing(false);
   };
+  const updateScene = (fn: (s: SceneState) => SceneState) =>
+    setScenes((all) => ({ ...all, [selected]: fn(all[selected] ?? emptyScene()) }));
 
   const clearAll = () => {
     abortRef.current?.abort();
@@ -225,34 +268,20 @@ export function App() {
     }
   };
 
-  const hasInput = () => Object.keys(manual).length > 0 || postureConfirmed;
-
+  // 場面・評価側の切り替えでは入力を消さない（場面ごと・側ごとに保持）
   const selectFrame = (i: number) => {
-    if (i === selected) return;
-    if (hasInput() && !confirm('評価場面を変更すると、入力済みの手動項目と姿勢の確認はリセットされます。変更しますか？')) return;
-    if (hasInput()) resetAssessment();
-    setSelected(i);
+    if (!analysis) return;
+    setSelected(Math.min(analysis.frames.length - 1, Math.max(0, i)));
   };
-
-  const changeSide = (s: Side) => {
-    if (s === side) return;
-    const sideKeys = SIDE_ITEM_KEYS.filter((k) => manual[k] != null);
-    if (sideKeys.length && !confirm('評価側を変更すると、上腕・前腕・手首の手動入力はリセットされます。変更しますか？')) return;
-    const m = { ...manual };
-    for (const k of SIDE_ITEM_KEYS) delete m[k];
-    setManual(m);
-    setPostureConfirmed(false);
-    setSide(s);
-  };
-
-  const setItem = (k: ItemKey, v: string | null) => {
-    setManual((m) => {
-      const n = { ...m };
-      if (v == null) delete n[k];
-      else n[k] = v;
-      return n;
-    });
-  };
+  const changeSide = (s: Side) => setSide(s);
+  const setItem = (k: ItemKey, v: string | null) => updateScene((sc) => setSceneItem(sc, side, k, v));
+  const setItems = (v: ItemValues) => updateScene((sc) => setSceneItems(sc, side, v));
+  const setConfirmed = (b: boolean) => updateScene((sc) => ({ ...sc, confirmed: { ...sc.confirmed, [side]: b } }));
+  const onEdit = (joint: number, pos: { x: number; y: number } | null) => updateScene((sc) => setEdit(sc, joint, pos));
+  const onUndo = () => updateScene(undoEdit);
+  const onResetEdits = () => updateScene(resetEdits);
+  const onCopyTask = copyFrom != null ? () => updateScene((sc) => copyTaskItems(scenes[copyFrom], sc)) : null;
+  const copyLabel = copyFrom != null && analysis ? `${analysis.frames[copyFrom].time.toFixed(1)}秒の場面で入力した作業条件があります。` : undefined;
 
   const goHome = () => {
     clearAll();
@@ -260,8 +289,11 @@ export function App() {
     refreshCount();
   };
 
+  const anySaved = Object.keys(savedDrafts).length > 0;
   const confirmLeaveAnalysis = () =>
-    !analysis || saved || confirm('解析結果と入力内容は保存されていません。破棄してよろしいですか？');
+    !analysis || anySaved || touchedFrames.size === 0
+      ? !analysis || anySaved || confirm('解析結果は保存されていません。破棄してよろしいですか？')
+      : confirm('入力内容は保存されていません。破棄してよろしいですか？');
 
   // ---- 戻る操作（Android の戻るボタンにも対応） -------------------------------
   const back = (): boolean => {
@@ -296,7 +328,7 @@ export function App() {
         setScreen('review');
         return true;
       case 'result':
-        setScreen('manual');
+        setScreen(isDesktop ? 'review' : 'manual');
         return true;
     }
   };
@@ -314,20 +346,21 @@ export function App() {
 
   useEffect(() => {
     const onUnload = (e: BeforeUnloadEvent) => {
-      if (analysis && !saved) {
+      if (analysis && !anySaved) {
         e.preventDefault();
         e.returnValue = '';
       }
     };
     window.addEventListener('beforeunload', onUnload);
     return () => window.removeEventListener('beforeunload', onUnload);
-  }, [analysis, saved]);
+  }, [analysis, anySaved]);
 
   useEffect(() => {
     window.scrollTo(0, 0);
   }, [screen]);
 
-  const isDemo = analysis?.source === 'demo' && ['review', 'manual', 'result'].includes(screen);
+  const isDemo = analysis?.source === 'demo' && ['review', 'manual', 'result'].includes(screen) && !(isDesktop && screen !== 'result');
+  const fullScreen = isDesktop && (screen === 'review' || screen === 'manual');
 
   // 開発時の検証用フック（本番ビルドでは無効）
   if (import.meta.env.DEV) {
@@ -339,6 +372,25 @@ export function App() {
       state: () => ({ screen, selected, side, status, reba: result.reba, unknown: result.unknown, timing: analysis?.timing }),
       analysis: () => analysis,
       scores: () => scores,
+      scene: () => scenes[selected],
+      frame: () => frame,
+      bench: async (url: string, accuracy: Settings['accuracy'], delegate: Settings['delegate'] = 'CPU', fps = 5) => {
+        const { stabilityMetrics } = await import('./lib/analysis/metrics');
+        const b = await (await fetch(url)).blob();
+        const v = await loadVideo(new File([b], 'bench.mp4', { type: b.type || 'video/mp4' }), 'bench');
+        try {
+          const res = await analyzeVideo(v, { ...settings, accuracy, delegate, fps }, {
+            start: 0,
+            end: Math.min(20, v.duration),
+            signal: new AbortController().signal,
+            onProgress: () => undefined,
+          });
+          (window as unknown as Record<string, unknown>)[`__bench_${accuracy}_${delegate}`] = res;
+          return { accuracy, delegate, totalSec: +(res.timing.totalMs / 1000).toFixed(1), ...stabilityMetrics(res) };
+        } finally {
+          releaseVideo(v);
+        }
+      },
     };
   }
 
@@ -356,7 +408,7 @@ export function App() {
           onHistory={() => setScreen('history')}
           onSettings={() => setScreen('settings')}
           onHelp={() => setScreen('help')}
-          onRetryModel={() => poseEngine.ensure(settings.model, settings.delegate).catch(() => undefined)}
+          onRetryModel={() => poseEngine.ensure(PRESETS[settings.accuracy].model, settings.delegate).catch(() => undefined)}
           error={homeError}
           offlineReady={pwa.offlineReady || !!navigator.serviceWorker?.controller}
           needRefresh={pwa.needRefresh}
@@ -378,6 +430,7 @@ export function App() {
           onStart={() => startAnalysis()}
           onCancel={goHome}
           settings={settings}
+          onSettings={updateSettings}
           message={prepMsg}
         />
       ) : null;
@@ -386,8 +439,61 @@ export function App() {
       body = <Analyzing progress={progress} onCancel={() => abortRef.current?.abort()} />;
       break;
     case 'review':
-      body =
-        analysis && summary ? (
+    case 'manual': {
+      if (!analysis || !summary || !frame || !rawFrame) {
+        body = null;
+        break;
+      }
+      const editor = (
+        <FrameEditor
+          frame={frame}
+          autoFrame={rawFrame}
+          side={side}
+          edits={scene.edits}
+          visThr={visThr}
+          onEdit={onEdit}
+          onUndo={onUndo}
+          onResetAll={onResetEdits}
+          canUndo={scene.undo.length > 0}
+          onModeChange={setEditing}
+        />
+      );
+      const checklist = {
+        side,
+        auto,
+        hints,
+        manual,
+        onSet: setItem,
+        onSetMany: setItems,
+        postureConfirmed,
+        onPostureConfirmed: setConfirmed,
+        result,
+        onCopyTask,
+        copyLabel,
+      };
+      if (isDesktop) {
+        body = (
+          <Workspace
+            {...checklist}
+            analysis={analysis}
+            summary={summary}
+            scores={scores}
+            candidates={candidates}
+            selected={selected}
+            onSelect={selectFrame}
+            onSide={changeSide}
+            frame={frame}
+            editor={editor}
+            editing={editing}
+            touchedFrames={touchedFrames}
+            status={status}
+            onUndo={onUndo}
+            onNext={() => setScreen('result')}
+            onBack={back}
+          />
+        );
+      } else if (screen === 'review') {
+        body = (
           <Review
             analysis={analysis}
             summary={summary}
@@ -401,32 +507,18 @@ export function App() {
             hints={hints}
             result={result}
             status={status}
-            visThr={settings.visibilityThreshold}
+            visThr={visThr}
+            editor={editor}
+            frame={frame}
             onNext={() => setScreen('manual')}
             onBack={back}
           />
-        ) : null;
+        );
+      } else {
+        body = <Manual {...checklist} frameTime={frame.time} status={status} editor={editor} onNext={() => setScreen('result')} onBack={back} />;
+      }
       break;
-    case 'manual':
-      body = frame ? (
-        <Manual
-          frame={frame}
-          side={side}
-          auto={auto}
-          hints={hints}
-          manual={manual}
-          onSet={setItem}
-          onSetMany={(v) => setManual((m) => ({ ...m, ...v }))}
-          postureConfirmed={postureConfirmed}
-          onPostureConfirmed={setPostureConfirmed}
-          result={result}
-          status={status}
-          isDemo={analysis?.source === 'demo'}
-          onNext={() => setScreen('result')}
-          onBack={back}
-        />
-      ) : null;
-      break;
+    }
     case 'result':
       body = draft ? (
         <Result
@@ -437,7 +529,7 @@ export function App() {
           onMeta={setMeta}
           onSave={async (r) => {
             await saveRecord(r);
-            setSaved(true);
+            setSavedDrafts((d) => ({ ...d, [draftKey]: r.createdAt }));
             try {
               localStorage.setItem(META_KEY, JSON.stringify({ site: r.meta.site, evaluator: r.meta.evaluator }));
             } catch {
@@ -448,6 +540,7 @@ export function App() {
           onNew={() => {
             if (confirmLeaveAnalysis()) goHome();
           }}
+          onAnother={() => setScreen(isDesktop ? 'review' : 'review')}
           onBack={back}
           toast={toast}
         />
@@ -493,7 +586,7 @@ export function App() {
   }
 
   return (
-    <div class="app">
+    <div class={`app ${isDesktop ? 'desk' : ''} ${fullScreen ? 'full' : ''}`}>
       {isDemo && <DemoBanner />}
       {body}
       <Toast msg={toastMsg} />

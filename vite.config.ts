@@ -46,7 +46,8 @@ export default defineConfig(({ mode }) => ({
         globPatterns: [
           '**/*.{js,css,html,svg,png,webmanifest}',
           'mediapipe/wasm/vision_wasm_internal.{js,wasm}',
-          'models/pose_landmarker_lite.task',
+          // スマホの初期値（高精度）で使う標準モデルまで含める。最高精度用の heavy は初回使用時にキャッシュ
+          'models/pose_landmarker_{lite,full}.task',
         ],
         maximumFileSizeToCacheInBytes: 20 * 1024 * 1024,
         navigateFallback: 'index.html',

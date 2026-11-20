@@ -3,7 +3,8 @@ import { useState } from 'preact/hooks';
 import { ModelStatus } from '../components/ModelStatus';
 import { Notice, TopBar } from '../components/ui';
 import { MODEL_FILES } from '../lib/pose/engine';
-import { DEFAULT_SETTINGS, type Settings } from '../state/settings';
+import { AccuracyPicker } from '../components/AccuracyPicker';
+import { PRESETS, type Settings, deviceDefaults } from '../state/settings';
 
 function Choice<T extends string | number>({ label, value, options, onChange, help }: { label: string; value: T; options: [T, string][]; onChange: (v: T) => void; help?: ComponentChildren }) {
   return (
@@ -26,13 +27,14 @@ function Choice<T extends string | number>({ label, value, options, onChange, he
 export function SettingsView({ settings, onChange, onBack }: { settings: Settings; onChange: (s: Settings) => void; onBack: () => void }) {
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) => onChange({ ...settings, [k]: v });
   const [fetchMsg, setFetchMsg] = useState<string | null>(null);
+  const model = MODEL_FILES[PRESETS[settings.accuracy].model];
   const cacheFull = async () => {
     setFetchMsg('取得中…');
     try {
-      const res = await fetch(MODEL_FILES.full.path);
+      const res = await fetch(model.path);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       await res.arrayBuffer();
-      setFetchMsg('標準モデルを取得しました（オフラインでも選択できます）');
+      setFetchMsg(`${model.label}モデルを取得しました（オフラインでも使えます）`);
     } catch (e) {
       setFetchMsg(`取得できませんでした（${e instanceof Error ? e.message : String(e)}）`);
     }
@@ -40,7 +42,7 @@ export function SettingsView({ settings, onChange, onBack }: { settings: Setting
   return (
     <>
       <TopBar title="詳細設定" onBack={onBack} />
-      <main>
+      <main class="desk-2col">
         <section class="card">
           <h2>解析</h2>
           <Choice
@@ -55,16 +57,13 @@ export function SettingsView({ settings, onChange, onBack }: { settings: Setting
             onChange={(v) => set('fps', v)}
             help="多いほど細かく調べられますが、解析時間とメモリ使用量が増えます。"
           />
-          <Choice
-            label="姿勢推定モデル"
-            value={settings.model}
-            options={[
-              ['lite', `${MODEL_FILES.lite.label}（初期値・約${MODEL_FILES.lite.sizeMB}MB）`],
-              ['full', `${MODEL_FILES.full.label}（約${MODEL_FILES.full.sizeMB}MB）`],
-            ]}
-            onChange={(v) => set('model', v)}
-            help="標準モデルは軽量モデルより処理が重くなります。どちらが現場の動画に適するかは未検証です。"
-          />
+          <div class="item">
+            <div class="item-head">
+              <span class="label">解析の精度</span>
+            </div>
+            <AccuracyPicker value={settings.accuracy} onChange={(v) => set('accuracy', v)} />
+            <p class="hint">PC では「最高精度」、スマホでは「高精度」が初期値です。どの設定が現場の動画に最適かは未検証です。</p>
+          </div>
           <Choice
             label="実行方式"
             value={settings.delegate}
@@ -77,7 +76,7 @@ export function SettingsView({ settings, onChange, onBack }: { settings: Setting
           />
           <ModelStatus />
           <button class="btn small" onClick={cacheFull}>
-            標準モデルをオフライン用に取得
+            選択中の精度のモデル（{model.label}・約{model.sizeMB}MB）をオフライン用に取得
           </button>
           {fetchMsg && <p class="hint">{fetchMsg}</p>}
         </section>
@@ -132,7 +131,7 @@ export function SettingsView({ settings, onChange, onBack }: { settings: Setting
         </section>
 
         <Notice kind="info">設定はこの端末に保存されます。</Notice>
-        <button class="btn block" onClick={() => onChange({ ...DEFAULT_SETTINGS })}>
+        <button class="btn block" onClick={() => onChange(deviceDefaults())}>
           初期値に戻す
         </button>
       </main>

@@ -4,17 +4,16 @@ import { loadBitmap } from '../lib/export/compose';
 import { COLORS, drawSkeleton } from '../lib/export/overlay';
 import { LM, type Pt, type Side, sideIdx } from '../lib/pose/landmarks';
 
-const cache = new Map<Blob, Promise<ImageBitmap | HTMLImageElement>>();
-function bitmapOf(blob: Blob) {
-  let p = cache.get(blob);
+export const bitmapCache = new Map<Blob, Promise<ImageBitmap | HTMLImageElement>>();
+export function bitmapOf(blob: Blob) {
+  let p = bitmapCache.get(blob);
   if (!p) {
     p = loadBitmap(blob);
-    cache.set(blob, p);
-    if (cache.size > 16) {
-      const first = cache.keys().next().value as Blob;
-      const old = cache.get(first);
-      cache.delete(first);
-      old?.then((b) => 'close' in b && b.close()).catch(() => undefined);
+    bitmapCache.set(blob, p);
+    if (bitmapCache.size > 24) {
+      const first = bitmapCache.keys().next().value as Blob;
+      // 表示中の画面が参照している可能性があるため close はせず、参照が切れたらGCに任せる
+      bitmapCache.delete(first);
     }
   }
   return p;
@@ -73,7 +72,7 @@ function drawLabels(ctx: CanvasRenderingContext2D, items: LabelItem[], bodyX: nu
 
 const r = (v: number) => Math.round(v);
 
-function drawAngleLabels(ctx: CanvasRenderingContext2D, f: FrameRecord, side: Side, pts: Pt[]) {
+export function drawAngleLabels(ctx: CanvasRenderingContext2D, f: FrameRecord, side: Side, pts: Pt[]) {
   const w = ctx.canvas.width;
   const h = ctx.canvas.height;
   const at = (i: number) => [pts[i].x * w, pts[i].y * h] as const;

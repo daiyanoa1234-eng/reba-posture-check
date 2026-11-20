@@ -31,7 +31,7 @@ export function Home(props: {
           </button>
         }
       />
-      <main>
+      <main class="desk-2col">
         {props.needRefresh && (
           <Notice kind="info" title="新しいバージョンがあります">
             <button class="btn small" onClick={props.onUpdate}>
